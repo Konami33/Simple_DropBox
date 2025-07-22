@@ -1,36 +1,61 @@
-// client/lib/sync.js
+// client/lib/sync.js - Merkle Tree version
 const api = require('./api');
 const config = require('../config');
 const path = require('path');
 const fs = require('fs-extra');
+const crypto = require('crypto');
+const { MerkleTree } = require('./merkle-tree');
 
 let lastSyncAt = null;
 
+function calculateFileHash(filePath) {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return crypto.createHash('sha256').update(buffer).digest('hex');
+  } catch (error) {
+    return null;
+  }
+}
+
 async function performSync() {
   try {
-    console.log('🔄 Starting sync...');
+    console.log('🔄 Starting Merkle Tree sync...');
     
-    // Initialize sync session
-    const syncData = await api.initSync(config.DEVICE_ID, lastSyncAt);
+    const fileWatcher = require('./file-watcher');
+    const localTree = fileWatcher.getMerkleTree();
     
-    if (syncData.changedFiles.length > 0) {
-      console.log(`📥 Found ${syncData.changedFiles.length} changed files on server`);
+    // Get differences between local and server trees
+    const differences = await api.getMerkleTreeDifferences(config.DEVICE_ID, localTree.toJSON());
+    
+    if (differences.added.length > 0 || differences.modified.length > 0 || differences.deleted.length > 0) {
+      console.log(`� Sync differences found:`);
+      console.log(`  Added: ${differences.added.length}`);
+      console.log(`  Modified: ${differences.modified.length}`);
+      console.log(`  Deleted: ${differences.deleted.length}`);
       
-      // Download changed files
-      for (const file of syncData.changedFiles) {
-        await downloadFileFromServer(file);
+      // Download added/modified files from server
+      for (const file of [...differences.added, ...differences.modified]) {
+        if (file.s3_url) { // Only download fully uploaded files
+          await downloadFileFromServer(file);
+        }
       }
+      
+      // Handle deleted files
+      for (const file of differences.deleted) {
+        await handleDeletedFile(file);
+      }
+      
+      // Update local tree and save
+      await fileWatcher.saveMerkleTree();
+      
     } else {
-      console.log('✅ No changes found on server');
+      console.log('✅ No sync differences found');
     }
     
-    // Complete sync
-    await api.completeSync(syncData.session.id);
-    
     // Update last sync time
-    lastSyncAt = syncData.serverTime;
+    lastSyncAt = new Date().toISOString();
     
-    console.log('✅ Sync completed');
+    console.log('✅ Merkle Tree sync completed');
     
   } catch (error) {
     console.error('❌ Sync failed:', error.message);
@@ -38,24 +63,104 @@ async function performSync() {
 }
 
 async function downloadFileFromServer(fileMetadata) {
+  const fileWatcher = require('./file-watcher'); // Import here to avoid circular dependency
+  
   try {
     const localPath = path.join(config.WATCH_DIRECTORY, fileMetadata.file_path);
+    const relativePath = path.relative(config.WATCH_DIRECTORY, localPath);
     
-    // Check if file already exists and is the same size
+    // Check if file already exists and compare hash
     if (await fs.pathExists(localPath)) {
-      const stats = await fs.stat(localPath);
-      if (stats.size === fileMetadata.file_size) {
+      const localHash = calculateFileHash(localPath);
+      if (localHash === fileMetadata.hash) {
         console.log(`⏭️ File unchanged: ${fileMetadata.filename}`);
         return;
       }
     }
     
-    // Download the file
+    // Mark file as being downloaded to prevent upload trigger
+    fileWatcher.markAsDownloading(relativePath);
+    
     console.log(`📥 Downloading: ${fileMetadata.filename}`);
-    await api.downloadFile(fileMetadata.id, localPath);
+    
+    // Download the file using S3 URL
+    if (fileMetadata.s3_url) {
+      await downloadFromS3Url(fileMetadata.s3_url, localPath);
+    } else {
+      // Fallback to old download method
+      await api.downloadFile(fileMetadata.id, localPath);
+    }
+    
+    // Update local Merkle Tree
+    const localTree = fileWatcher.getMerkleTree();
+    localTree.addOrUpdateFile(relativePath, {
+      filename: fileMetadata.filename,
+      local_url: localPath,
+      s3_url: fileMetadata.s3_url,
+      hash: fileMetadata.hash,
+      size: fileMetadata.size,
+      mime_type: fileMetadata.mime_type
+    });
+    
+    // Mark download complete with hash
+    fileWatcher.markDownloadComplete(relativePath, fileMetadata.hash);
     
   } catch (error) {
     console.error(`❌ Failed to download ${fileMetadata.filename}:`, error.message);
+    
+    // Clean up on error
+    const relativePath = path.relative(config.WATCH_DIRECTORY, 
+      path.join(config.WATCH_DIRECTORY, fileMetadata.file_path));
+    require('./file-watcher').markDownloadComplete(relativePath, null);
+  }
+}
+
+async function downloadFromS3Url(s3Url, localPath) {
+  const axios = require('axios');
+  
+  try {
+    const response = await axios.get(s3Url, {
+      responseType: 'stream'
+    });
+
+    // Ensure directory exists
+    const dir = path.dirname(localPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Save file
+    const writeStream = fs.createWriteStream(localPath);
+    response.data.pipe(writeStream);
+
+    return new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+  } catch (error) {
+    console.error('❌ S3 download failed:', error.message);
+    throw error;
+  }
+}
+
+async function handleDeletedFile(fileMetadata) {
+  try {
+    const localPath = path.join(config.WATCH_DIRECTORY, fileMetadata.file_path);
+    const relativePath = path.relative(config.WATCH_DIRECTORY, localPath);
+    
+    // Remove local file if it exists
+    if (await fs.pathExists(localPath)) {
+      await fs.remove(localPath);
+      console.log(`🗑️ Deleted local file: ${fileMetadata.filename}`);
+    }
+    
+    // Remove from local Merkle Tree
+    const fileWatcher = require('./file-watcher');
+    const localTree = fileWatcher.getMerkleTree();
+    localTree.removeFile(relativePath);
+    
+  } catch (error) {
+    console.error(`❌ Failed to handle deleted file ${fileMetadata.filename}:`, error.message);
   }
 }
 

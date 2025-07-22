@@ -56,6 +56,7 @@ async function uploadFile(filePath, remotePath = '/') {
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
     form.append('filePath', remotePath);
+    form.append('localUrl', filePath);
 
     const response = await api.post('/files/upload', form, {
       headers: form.getHeaders(),
@@ -153,6 +154,47 @@ async function completeSync(sessionId) {
   }
 }
 
+// Update Merkle Tree on server
+async function updateMerkleTree(deviceId, treeData) {
+  try {
+    const response = await api.post('/merkle/update', {
+      deviceId,
+      treeData
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ Merkle tree update failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
+// Get Merkle Tree from server
+async function getMerkleTree(deviceId) {
+  try {
+    const response = await api.get('/merkle/tree', {
+      params: { deviceId }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ Get Merkle tree failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
+// Get differences between local and server trees
+async function getMerkleTreeDifferences(deviceId, localTreeData) {
+  try {
+    const response = await api.post('/merkle/diff', {
+      deviceId,
+      localTreeData
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ Get Merkle tree differences failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   authenticate,
   uploadFile,
@@ -160,5 +202,8 @@ module.exports = {
   listFiles,
   deleteFile,
   initSync,
-  completeSync
+  completeSync,
+  updateMerkleTree,
+  getMerkleTree,
+  getMerkleTreeDifferences
 };

@@ -53,6 +53,36 @@ const migrations = [
       
       CREATE INDEX IF NOT EXISTS idx_sync_sessions_user_device ON sync_sessions(user_id, device_id);
     `
+  },
+  {
+    name: 'create_merkle_trees_table',
+    sql: `
+      CREATE TABLE IF NOT EXISTS merkle_trees (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id VARCHAR(255) NOT NULL,
+        root_hash VARCHAR(64),
+        tree_data JSONB NOT NULL,
+        version INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_merkle_trees_user_device ON merkle_trees(user_id, device_id);
+      CREATE INDEX IF NOT EXISTS idx_merkle_trees_root_hash ON merkle_trees(root_hash);
+      CREATE INDEX IF NOT EXISTS idx_merkle_trees_updated ON merkle_trees(updated_at);
+    `
+  },
+  {
+    name: 'update_files_table_for_merkle',
+    sql: `
+      ALTER TABLE files ADD COLUMN IF NOT EXISTS local_url TEXT;
+      ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_url TEXT;
+      ALTER TABLE files ADD COLUMN IF NOT EXISTS upload_status VARCHAR(50) DEFAULT 'pending';
+      
+      CREATE INDEX IF NOT EXISTS idx_files_upload_status ON files(upload_status);
+      CREATE INDEX IF NOT EXISTS idx_files_s3_url ON files(s3_url);
+    `
   }
 ];
 

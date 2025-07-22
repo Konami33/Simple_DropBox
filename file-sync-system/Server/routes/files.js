@@ -27,6 +27,17 @@ function generateMinioKey(userId, filename) {
   return `users/${userId}/files/${fileId}/${filename}`;
 }
 
+function generateS3Url(minioKey) {
+  // Generate S3-compatible URL for MinIO
+  const endpoint = process.env.MINIO_ENDPOINT || 'localhost';
+  const port = process.env.MINIO_PORT || '9000';
+  const bucket = process.env.MINIO_BUCKET || 'filesync-bucket';
+  const useSSL = process.env.MINIO_USE_SSL === 'true';
+  const protocol = useSSL ? 'https' : 'http';
+  
+  return `${protocol}://${endpoint}:${port}/${bucket}/${minioKey}`;
+}
+
 // Upload file
 router.post('/upload', authMiddleware, upload.single('file'), async (req, res, next) => {
   try {
@@ -35,19 +46,47 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
     }
     
     const { originalname, buffer, mimetype, size } = req.file;
-    const { filePath = '/' } = req.body;
+    const { filePath = '/', localUrl } = req.body;
     
     const fileHash = calculateFileHash(buffer);
     const fullPath = path.join(filePath, originalname).replace(/\\/g, '/');
     
-    // Check for duplicate file
+    // Check for duplicate file by hash (allow updates)
     const existingFile = await pool.query(
-      'SELECT * FROM files WHERE user_id = $1 AND file_path = $2 AND status = $3',
-      [req.user.id, fullPath, 'active']
+      'SELECT * FROM files WHERE user_id = $1 AND file_hash = $2 AND status = $3',
+      [req.user.id, fileHash, 'active']
     );
     
+    let fileRecord;
+    
     if (existingFile.rows.length > 0) {
-      return res.status(409).json({ error: 'File already exists at this path' });
+      // File with same content already exists
+      fileRecord = existingFile.rows[0];
+      
+      // Update local_url if provided
+      if (localUrl && fileRecord.local_url !== localUrl) {
+        await pool.query(
+          'UPDATE files SET local_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          [localUrl, fileRecord.id]
+        );
+        fileRecord.local_url = localUrl;
+      }
+      
+      res.json({
+        message: 'File already exists with identical content',
+        file: {
+          id: fileRecord.id,
+          filename: fileRecord.filename,
+          filePath: fileRecord.file_path,
+          fileSize: fileRecord.file_size,
+          fileHash: fileRecord.file_hash,
+          mimeType: fileRecord.mime_type,
+          localUrl: fileRecord.local_url,
+          s3Url: generateS3Url(fileRecord.minio_key),
+          createdAt: fileRecord.created_at
+        }
+      });
+      return;
     }
     
     const minioKey = generateMinioKey(req.user.id, originalname);
@@ -58,14 +97,17 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
       'X-File-Hash': fileHash,
     });
     
+    // Generate S3-compatible URL
+    const s3Url = generateS3Url(minioKey);
+    
     // Save to database
     const result = await pool.query(`
-      INSERT INTO files (user_id, filename, file_path, file_size, file_hash, mime_type, minio_key)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO files (user_id, filename, file_path, file_size, file_hash, mime_type, minio_key, local_url, s3_url, upload_status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
-    `, [req.user.id, originalname, fullPath, size, fileHash, mimetype, minioKey]);
+    `, [req.user.id, originalname, fullPath, size, fileHash, mimetype, minioKey, localUrl, s3Url, 'completed']);
     
-    const fileRecord = result.rows[0];
+    fileRecord = result.rows[0];
     
     res.status(201).json({
       message: 'File uploaded successfully',
@@ -76,6 +118,8 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
         fileSize: fileRecord.file_size,
         fileHash: fileRecord.file_hash,
         mimeType: fileRecord.mime_type,
+        localUrl: fileRecord.local_url,
+        s3Url: fileRecord.s3_url,
         createdAt: fileRecord.created_at
       }
     });

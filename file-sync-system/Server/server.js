@@ -8,6 +8,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const fileRoutes = require('./routes/files');
 const syncRoutes = require('./routes/sync');
+const merkleRoutes = require('./routes/merkle');
 const { errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -23,6 +24,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/merkle', merkleRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
