@@ -92,11 +92,13 @@ async function handleFileChange(filePath, eventType) {
     if (currentHash) {
       const stats = await fs.stat(filePath);
       const metadata = {
+        file_path: relativePath,
         filename: path.basename(filePath),
         local_url: filePath,
         s3_url: null, // Will be updated after upload
         hash: currentHash,
         size: stats.size,
+        timestamp: new Date().toISOString(),
         mime_type: getMimeType(filePath)
       };
       
@@ -161,14 +163,22 @@ async function processUploadQueue() {
       const result = await api.uploadFile(fileInfo.fullPath, remotePath === '.' ? '/' : remotePath);
       
       // Update Merkle Tree with S3 URL after successful upload
-      if (result.file && result.file.s3_url) {
-        merkleTree.updateS3Url(relativePath, result.file.s3_url);
+      if (result.file && result.file.s3Url) {
+        merkleTree.updateS3Url(relativePath, result.file.s3Url);
         await saveMerkleTree();
         console.log(`🌳 Updated S3 URL in Merkle Tree for: ${relativePath}`);
+      } else {
+        console.log(`⚠️ No S3 URL in response for: ${relativePath}`);
       }
       
       // Send updated Merkle Tree metadata to server
-      await api.updateMerkleTree(config.DEVICE_ID, merkleTree.toJSON());
+      try {
+        await api.updateMerkleTree(config.DEVICE_ID, merkleTree.toJSON());
+        console.log(`🌳 Sent tree update to server for: ${relativePath}`);
+      } catch (updateError) {
+        console.error(`⚠️ Failed to update server tree: ${updateError.message}`);
+        // Continue processing even if server update fails
+      }
       
       // Enhanced feedback based on server response
       if (result.message.includes('updated')) {

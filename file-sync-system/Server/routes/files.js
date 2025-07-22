@@ -27,15 +27,22 @@ function generateMinioKey(userId, filename) {
   return `users/${userId}/files/${fileId}/${filename}`;
 }
 
-function generateS3Url(minioKey) {
-  // Generate S3-compatible URL for MinIO
-  const endpoint = process.env.MINIO_ENDPOINT || 'localhost';
-  const port = process.env.MINIO_PORT || '9000';
-  const bucket = process.env.MINIO_BUCKET || 'filesync-bucket';
-  const useSSL = process.env.MINIO_USE_SSL === 'true';
-  const protocol = useSSL ? 'https' : 'http';
-  
-  return `${protocol}://${endpoint}:${port}/${bucket}/${minioKey}`;
+async function generateS3Url(minioKey) {
+  // Generate presigned URL for temporary access
+  try {
+    const presignedUrl = await minioClient.presignedGetObject(BUCKET_NAME, minioKey, 60 * 60); // 1 hour expiry
+    return presignedUrl;
+  } catch (error) {
+    console.error('Error generating presigned URL:', error);
+    // Fallback to basic URL
+    const endpoint = process.env.MINIO_ENDPOINT || 'localhost';
+    const port = process.env.MINIO_PORT || '9000';
+    const bucket = process.env.MINIO_BUCKET || 'filesync-bucket';
+    const useSSL = process.env.MINIO_USE_SSL === 'true';
+    const protocol = useSSL ? 'https' : 'http';
+    
+    return `${protocol}://${endpoint}:${port}/${bucket}/${minioKey}`;
+  }
 }
 
 // Upload file
@@ -82,7 +89,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
           fileHash: fileRecord.file_hash,
           mimeType: fileRecord.mime_type,
           localUrl: fileRecord.local_url,
-          s3Url: generateS3Url(fileRecord.minio_key),
+          s3Url: await generateS3Url(fileRecord.minio_key),
           createdAt: fileRecord.created_at
         }
       });
@@ -98,7 +105,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
     });
     
     // Generate S3-compatible URL
-    const s3Url = generateS3Url(minioKey);
+    const s3Url = await generateS3Url(minioKey);
     
     // Save to database
     const result = await pool.query(`

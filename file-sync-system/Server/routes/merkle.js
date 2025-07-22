@@ -191,22 +191,33 @@ router.post('/diff', authMiddleware, async (req, res, next) => {
     };
     
     if (serverResult.rows.length > 0) {
+      // Server tree exists - compare with local tree
       const serverTree = new MerkleTree();
       serverTree.fromJSON(serverResult.rows[0].tree_data);
       
       const localTree = new MerkleTree();
       localTree.fromJSON(localTreeData);
       
-      // Calculate differences (server perspective)
+      // Calculate differences (server perspective - what server has that local doesn't)
       differences = serverTree.getDifferences(localTree);
+    } else {
+      // No server tree exists yet - all local files are "new" from server perspective
+      console.log('No server tree found for device:', deviceId);
+      // Return empty differences since there's nothing on server to sync down
+      differences = {
+        added: [],
+        modified: [],
+        deleted: []
+      };
     }
     
     res.json({
       differences,
       serverRootHash: serverResult.rows.length > 0 ? serverResult.rows[0].root_hash : null,
-      localRootHash: localTreeData.rootHash
+      localRootHash: localTreeData.rootHash || null
     });
   } catch (error) {
+    console.error('Error in /diff endpoint:', error);
     next(error);
   }
 });
