@@ -22,27 +22,21 @@ function calculateFileHash(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function generateMinioKey(userId, filename) {
-  const fileId = uuidv4();
-  return `users/${userId}/files/${fileId}/${filename}`;
-}
-
-async function generateS3Url(minioKey) {
-  // Generate presigned URL for temporary access
+async function generatePresignedUrl(minioKey, expirySeconds = 3600) {
+  // Generate presigned URL for temporary access (default 1 hour)
   try {
-    const presignedUrl = await minioClient.presignedGetObject(BUCKET_NAME, minioKey, 60 * 60); // 1 hour expiry
+    const presignedUrl = await minioClient.presignedGetObject(BUCKET_NAME, minioKey, expirySeconds);
     return presignedUrl;
   } catch (error) {
     console.error('Error generating presigned URL:', error);
-    // Fallback to basic URL
-    const endpoint = process.env.MINIO_ENDPOINT || 'localhost';
-    const port = process.env.MINIO_PORT || '9000';
-    const bucket = process.env.MINIO_BUCKET || 'filesync-bucket';
-    const useSSL = process.env.MINIO_USE_SSL === 'true';
-    const protocol = useSSL ? 'https' : 'http';
-    
-    return `${protocol}://${endpoint}:${port}/${bucket}/${minioKey}`;
+    throw new Error('Failed to generate download URL');
   }
+}
+
+// Generate permanent MinIO key (stored in database)
+function generatePermanentMinioKey(userId, filename) {
+  const fileId = uuidv4();
+  return `users/${userId}/files/${fileId}/${filename}`;
 }
 
 // Upload file
@@ -89,14 +83,14 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
           fileHash: fileRecord.file_hash,
           mimeType: fileRecord.mime_type,
           localUrl: fileRecord.local_url,
-          s3Url: await generateS3Url(fileRecord.minio_key),
+          s3Url: await generatePresignedUrl(fileRecord.minio_key),
           createdAt: fileRecord.created_at
         }
       });
       return;
     }
     
-    const minioKey = generateMinioKey(req.user.id, originalname);
+    const minioKey = generatePermanentMinioKey(req.user.id, originalname);
     
     // Upload to MinIO
     await minioClient.putObject(BUCKET_NAME, minioKey, buffer, {
@@ -104,15 +98,12 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
       'X-File-Hash': fileHash,
     });
     
-    // Generate S3-compatible URL
-    const s3Url = await generateS3Url(minioKey);
-    
-    // Save to database
+    // Save to database (store minioKey, not presigned URL)
     const result = await pool.query(`
-      INSERT INTO files (user_id, filename, file_path, file_size, file_hash, mime_type, minio_key, local_url, s3_url, upload_status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO files (user_id, filename, file_path, file_size, file_hash, mime_type, minio_key, local_url, upload_status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
-    `, [req.user.id, originalname, fullPath, size, fileHash, mimetype, minioKey, localUrl, s3Url, 'completed']);
+    `, [req.user.id, originalname, fullPath, size, fileHash, mimetype, minioKey, localUrl, 'completed']);
     
     fileRecord = result.rows[0];
     
@@ -126,7 +117,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res, n
         fileHash: fileRecord.file_hash,
         mimeType: fileRecord.mime_type,
         localUrl: fileRecord.local_url,
-        s3Url: fileRecord.s3_url,
+        s3Url: await generatePresignedUrl(fileRecord.minio_key),
         createdAt: fileRecord.created_at
       }
     });
@@ -201,6 +192,36 @@ router.get('/', authMiddleware, async (req, res, next) => {
         offset: parseInt(offset),
         total: result.rows.length
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get fresh presigned URL for a file
+router.get('/:fileId/url', authMiddleware, async (req, res, next) => {
+  try {
+    const { fileId } = req.params;
+    const { expiryHours = 24 } = req.query; // Default 24 hours
+    
+    const result = await pool.query(
+      'SELECT minio_key, filename FROM files WHERE id = $1 AND user_id = $2 AND status = $3',
+      [fileId, req.user.id, 'active']
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    const file = result.rows[0];
+    const expirySeconds = parseInt(expiryHours) * 3600;
+    const presignedUrl = await generatePresignedUrl(file.minio_key, expirySeconds);
+    
+    res.json({
+      filename: file.filename,
+      url: presignedUrl,
+      expiresIn: expirySeconds,
+      expiresAt: new Date(Date.now() + expirySeconds * 1000).toISOString()
     });
   } catch (error) {
     next(error);

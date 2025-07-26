@@ -101,8 +101,8 @@ async function downloadFileFromServer(fileMetadata) {
     
     console.log(`📥 Downloading: ${fileMetadata.filename}`);
     
-    // Download the file using authenticated server endpoint instead of direct S3
-    // This avoids S3 permission issues
+    // Use authenticated server download instead of direct S3 access
+    // This ensures fresh URLs and proper authentication
     if (fileMetadata.id) {
       await api.downloadFile(fileMetadata.id, localPath);
     } else {

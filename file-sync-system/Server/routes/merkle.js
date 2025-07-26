@@ -3,8 +3,20 @@ const express = require('express');
 const Joi = require('joi');
 const authMiddleware = require('../middleware/auth');
 const pool = require('../config/database');
+const { minioClient, BUCKET_NAME } = require('../config/minio');
 
 const router = express.Router();
+
+// Generate presigned URL for file access
+async function generatePresignedUrl(minioKey, expirySeconds = 3600) {
+  try {
+    const presignedUrl = await minioClient.presignedGetObject(BUCKET_NAME, minioKey, expirySeconds);
+    return presignedUrl;
+  } catch (error) {
+    console.error('Error generating presigned URL:', error);
+    return null;
+  }
+}
 
 // Simple Merkle Tree implementation for server
 class MerkleTree {
@@ -60,6 +72,40 @@ class MerkleTree {
     
     return differences;
   }
+}
+
+// Enrich file metadata with fresh presigned URLs
+async function enrichFilesWithFreshUrls(files, userId) {
+  const enrichedFiles = [];
+  
+  for (const file of files) {
+    try {
+      // Get minio_key from database
+      const dbResult = await pool.query(
+        'SELECT minio_key, id FROM files WHERE user_id = $1 AND file_hash = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1',
+        [userId, file.hash, 'active']
+      );
+      
+      if (dbResult.rows.length > 0) {
+        const dbFile = dbResult.rows[0];
+        const freshUrl = await generatePresignedUrl(dbFile.minio_key, 24 * 3600); // 24 hours
+        
+        enrichedFiles.push({
+          ...file,
+          id: dbFile.id,
+          s3_url: freshUrl || file.s3_url // Fallback to old URL if generation fails
+        });
+      } else {
+        // File not found in database, return as-is
+        enrichedFiles.push(file);
+      }
+    } catch (error) {
+      console.error(`Error enriching file ${file.filename}:`, error);
+      enrichedFiles.push(file); // Return original if enrichment fails
+    }
+  }
+  
+  return enrichedFiles;
 }
 
 const updateTreeSchema = Joi.object({
@@ -210,9 +256,16 @@ router.post('/diff', authMiddleware, async (req, res, next) => {
         deleted: []
       };
     }
+
+    // Enrich differences with fresh presigned URLs
+    const enrichedDifferences = {
+      added: await enrichFilesWithFreshUrls(differences.added, req.user.id),
+      modified: await enrichFilesWithFreshUrls(differences.modified, req.user.id),
+      deleted: differences.deleted // No URLs needed for deleted files
+    };
     
     res.json({
-      differences,
+      differences: enrichedDifferences,
       serverRootHash: serverResult.rows.length > 0 ? serverResult.rows[0].root_hash : null,
       localRootHash: localTreeData.rootHash || null
     });

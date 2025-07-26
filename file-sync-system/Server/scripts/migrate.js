@@ -77,11 +77,18 @@ const migrations = [
     name: 'update_files_table_for_merkle',
     sql: `
       ALTER TABLE files ADD COLUMN IF NOT EXISTS local_url TEXT;
-      ALTER TABLE files ADD COLUMN IF NOT EXISTS s3_url TEXT;
       ALTER TABLE files ADD COLUMN IF NOT EXISTS upload_status VARCHAR(50) DEFAULT 'pending';
+      ALTER TABLE files DROP COLUMN IF EXISTS s3_url;
       
       CREATE INDEX IF NOT EXISTS idx_files_upload_status ON files(upload_status);
-      CREATE INDEX IF NOT EXISTS idx_files_s3_url ON files(s3_url);
+      CREATE INDEX IF NOT EXISTS idx_files_minio_key ON files(minio_key);
+    `
+  },
+  {
+    name: 'add_minio_key_index',
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_files_user_hash ON files(user_id, file_hash);
+      CREATE INDEX IF NOT EXISTS idx_files_status_active ON files(status) WHERE status = 'active';
     `
   }
 ];

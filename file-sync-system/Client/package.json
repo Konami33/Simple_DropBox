@@ -15,7 +15,8 @@
     "test-auth": "node examples/test-auth-api.js",
     "test-list": "node examples/test-list-api.js",
     "test-merkle": "node examples/test-merkle-api.js",
-    "test-all": "node examples/test-all-apis.js"
+    "test-all": "node examples/test-all-apis.js",
+    "test-urls": "node examples/test-permanent-urls.js"
   },
   "dependencies": {
     "axios": "^1.6.0",

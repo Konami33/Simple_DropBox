@@ -181,6 +181,19 @@ async function getMerkleTree(deviceId) {
   }
 }
 
+// Get fresh presigned URL for a file
+async function getFreshFileUrl(fileId, expiryHours = 24) {
+  try {
+    const response = await api.get(`/files/${fileId}/url`, {
+      params: { expiryHours }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ Get fresh file URL failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
 // Get differences between local and server trees
 async function getMerkleTreeDifferences(deviceId, localTreeData) {
   try {
@@ -195,6 +208,19 @@ async function getMerkleTreeDifferences(deviceId, localTreeData) {
   }
 }
 
+// Get fresh presigned URL for a file
+async function getFreshFileUrl(fileId, expiryHours = 24) {
+  try {
+    const response = await api.get(`/files/${fileId}/url`, {
+      params: { expiryHours }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ Get fresh file URL failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   authenticate,
   uploadFile,
@@ -205,5 +231,7 @@ module.exports = {
   completeSync,
   updateMerkleTree,
   getMerkleTree,
-  getMerkleTreeDifferences
+  getMerkleTreeDifferences,
+  getFreshFileUrl,
+  getToken: () => token
 };
