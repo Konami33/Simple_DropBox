@@ -49,16 +49,20 @@ async function performSync() {
         ...(differences.modified || [])
       ];
       
-    //   for (const file of filesToDownload) {
-    //     if (file.s3_url) { // Only download fully uploaded files
-    //       await downloadFileFromServer(file);
-    //     }
-    //   }
+      // Only download files that have valid s3_url (fully uploaded)
+      for (const file of filesToDownload) {
+        if (file.s3_url && file.id) {
+          await downloadFileFromServer(file);
+        } else {
+          console.log(`⏭️ Skipping download of ${file.filename} (no S3 URL or ID)`);
+        }
+      }
       
-      // Handle deleted files
-      if (differences.deleted) {
+      // Handle deleted files (propagate server deletions to local)
+      if (differences.deleted && differences.deleted.length > 0) {
+        console.log(`🗑️ Processing ${differences.deleted.length} deleted files from server...`);
         for (const file of differences.deleted) {
-          await handleDeletedFile(file);
+          await handleServerDeletion(file);
         }
       }
       
@@ -162,10 +166,12 @@ async function downloadFromS3Url(s3Url, localPath) {
   }
 }
 
-async function handleDeletedFile(fileMetadata) {
+async function handleServerDeletion(fileMetadata) {
   try {
     const localPath = path.join(config.WATCH_DIRECTORY, fileMetadata.file_path);
     const relativePath = path.relative(config.WATCH_DIRECTORY, localPath);
+    
+    console.log(`🗑️ Server deleted file, removing locally: ${fileMetadata.filename}`);
     
     // Remove local file if it exists
     if (await fs.pathExists(localPath)) {
@@ -178,8 +184,10 @@ async function handleDeletedFile(fileMetadata) {
     const localTree = fileWatcher.getMerkleTree();
     localTree.removeFile(relativePath);
     
+    console.log(`🌳 Removed from local Merkle Tree: ${fileMetadata.filename}`);
+    
   } catch (error) {
-    console.error(`❌ Failed to handle deleted file ${fileMetadata.filename}:`, error.message);
+    console.error(`❌ Failed to handle server deletion ${fileMetadata.filename}:`, error.message);
   }
 }
 

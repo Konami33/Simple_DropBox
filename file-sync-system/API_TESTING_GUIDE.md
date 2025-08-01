@@ -81,13 +81,27 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 **Login (if user exists):**
 ```bash
-curl -X POST http://localhost:3000/api/auth/login \
+curl -X POST http://13.213.60.1:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "test@example.com",
     "password": "password123"
   }'
 ```
+
+
+curl -X GET http://13.213.60.1:3000/api/files \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -X GET http://13.213.60.1:3000/api/files/e982ad8e-4645-4a40-bffb-08d8a9c070eb/download \
+  -H "Authorization: Bearer $TOKEN" | jq -r '.downloadUrl'
+
+
+curl -X GET http://13.213.60.1:3000/api/files/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/download \
+  -H "Authorization: Bearer $TOKEN"
+
+DOWNLOAD_URL=$(curl -s -X GET "http://13.213.60.1:3000/api/files/e982ad8e-4645-4a40-bffb-08d8a9c070eb/download" \
+  -H "Authorization: Bearer $TOKEN" | jq -r '.downloadUrl')
 
 **Response (save the token):**
 ```json

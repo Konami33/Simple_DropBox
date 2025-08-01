@@ -79,6 +79,12 @@ class MerkleTree {
     this.rebuildTree();
   }
 
+  // Get file information from the tree
+  getFile(filePath) {
+    const node = this.leaves.get(filePath);
+    return node ? node.data : null;
+  }
+
   // Update S3 URL for a file after successful upload
   updateS3Url(filePath, s3Url) {
     const node = this.leaves.get(filePath);

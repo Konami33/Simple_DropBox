@@ -221,6 +221,17 @@ async function getFreshFileUrl(fileId, expiryHours = 24) {
   }
 }
 
+// Delete file by hash (for propagating deletions)
+async function deleteFileByHash(fileHash) {
+  try {
+    const response = await api.delete(`/files/hash/${fileHash}`);
+    return response.data;
+  } catch (error) {
+    console.error('❌ Delete file by hash failed:', error.response?.data?.error || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   authenticate,
   uploadFile,
@@ -233,5 +244,6 @@ module.exports = {
   getMerkleTree,
   getMerkleTreeDifferences,
   getFreshFileUrl,
+  deleteFileByHash,
   getToken: () => token
 };

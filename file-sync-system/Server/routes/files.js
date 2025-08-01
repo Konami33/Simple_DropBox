@@ -259,4 +259,49 @@ router.delete('/:fileId', authMiddleware, async (req, res, next) => {
   }
 });
 
+// Delete file by hash (for propagating deletions across devices)
+router.delete('/hash/:fileHash', authMiddleware, async (req, res, next) => {
+  try {
+    const { fileHash } = req.params;
+    
+    // Find file by hash
+    const result = await pool.query(
+      'SELECT * FROM files WHERE user_id = $1 AND file_hash = $2 AND status = $3',
+      [req.user.id, fileHash, 'active']
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    const file = result.rows[0];
+    
+    try {
+      // Delete from MinIO
+      await minioClient.removeObject(BUCKET_NAME, file.minio_key);
+      console.log(`🗑️ Deleted from MinIO: ${file.minio_key}`);
+    } catch (minioError) {
+      console.error('MinIO deletion error:', minioError);
+      // Continue with database deletion even if MinIO fails
+    }
+    
+    // Mark as deleted in database
+    await pool.query(
+      'UPDATE files SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      ['deleted', file.id]
+    );
+    
+    res.json({
+      message: 'File deleted successfully',
+      file: {
+        id: file.id,
+        filename: file.filename,
+        fileHash: file.file_hash
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

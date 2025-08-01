@@ -113,10 +113,8 @@ async function handleFileChange(filePath, eventType) {
   if (eventType === 'add' || eventType === 'change') {
     queueUpload(filePath, relativePath);
   } else if (eventType === 'unlink') {
-    // Remove from Merkle Tree
-    merkleTree.removeFile(relativePath);
-    await saveMerkleTree();
-    console.log(`🌳 Removed from Merkle Tree: ${relativePath}`);
+    // Handle local deletion - propagate to server and other devices
+    await handleLocalDeletion(relativePath);
   }
 }
 
@@ -201,6 +199,45 @@ async function processUploadQueue() {
   }
   
   isProcessing = false;
+}
+
+// Handle local file deletion - propagate to server
+async function handleLocalDeletion(relativePath) {
+  try {
+    // Get file info from Merkle Tree before removing it
+    const fileInfo = merkleTree.getFile(relativePath);
+    
+    if (fileInfo) {
+      console.log(`🗑️ Local deletion detected: ${relativePath}`);
+      
+      // Try to delete from server if we have file hash
+      if (fileInfo.hash) {
+        try {
+          await api.deleteFileByHash(fileInfo.hash);
+          console.log(`🌐 Deleted from server: ${relativePath}`);
+        } catch (serverError) {
+          console.error(`⚠️ Failed to delete from server: ${serverError.message}`);
+          // Continue with local deletion even if server deletion fails
+        }
+      }
+    }
+    
+    // Remove from local Merkle Tree
+    merkleTree.removeFile(relativePath);
+    await saveMerkleTree();
+    console.log(`🌳 Removed from Merkle Tree: ${relativePath}`);
+    
+    // Send updated Merkle Tree to server
+    try {
+      await api.updateMerkleTree(config.DEVICE_ID, merkleTree.toJSON());
+      console.log(`🌳 Updated server tree after deletion: ${relativePath}`);
+    } catch (updateError) {
+      console.error(`⚠️ Failed to update server tree: ${updateError.message}`);
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error handling local deletion: ${error.message}`);
+  }
 }
 
 function markAsDownloading(relativePath) {
